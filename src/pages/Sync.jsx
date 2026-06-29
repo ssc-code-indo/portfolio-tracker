@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { handleCamsUpload } from "../parsers/camsParser"; // Links perfectly to your src/parsers folder
+import { handleCamsUpload } from "../parsers/cas"; // Links perfectly to your src/parsers folder
 
 export default function Sync() {
   const [loading, setLoading] = useState(false);
