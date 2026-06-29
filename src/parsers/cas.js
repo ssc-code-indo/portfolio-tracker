@@ -11,54 +11,60 @@ if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
 export const parseCamsPDFText = (rawText) => {
   const portfolio = {};
   
-  // Normalize text: remove layout quotes, commas between text, and internal ISIN spacing quirks
+  // Normalize layout text: remove internal whitespace formatting gaps
   const normalizedText = rawText
     .replace(/"/g, '')
-    .replace(/INF\s+/gi, 'INF'); // Fixes the KFintech "INF 109..." space bug
+    .replace(/INF\s+/gi, 'INF'); // Fixes KFintech space anomalies
 
-  // 1. Extract all individual asset blocks using ISIN positions as structural anchors
-  const isinRegex = /(INF[\dW]{9,10})/gi;
-  const matches = [...normalizedText.matchAll(isinRegex)];
+  // 1. Locate every ISIN starting anchor in the entire file
+  const isinRegex = /(INF[\dW]{9,12})/gi;
+  const positions = [];
+  let match;
+  
+  while ((match = isinRegex.exec(normalizedText)) !== null) {
+    positions.push({
+      isin: match[1].toUpperCase(),
+      index: match.index
+    });
+  }
 
-  if (matches.length === 0) {
-    console.error("Parser alert: No ISIN strings starting with 'INF' detected in the document text stream.");
+  if (positions.length === 0) {
+    console.error("Parser alert: No valid ISIN keys detected inside text matrix stream.");
     return [];
   }
 
-  matches.forEach((match, index) => {
-    const isin = match[1].toUpperCase();
+  // 2. Fragment the entire document text into absolute mutual fund boundaries
+  for (let i = 0; i < positions.length; i++) {
+    const current = positions[i];
+    const startPos = current.index;
+    // The section boundaries extend all the way up until the next fund's ISIN starts
+    const endPos = (i + 1 < positions.length) ? positions[i + 1].index : normalizedText.length;
     
-    // Create a text window surrounding the ISIN to capture both preceding and trailing metrics safely
-    const startPos = index === 0 ? 0 : matches[index - 1].index;
-    const endPos = index === matches.length - 1 ? normalizedText.length : matches[index + 1].index;
-    const searchWindow = normalizedText.substring(startPos, endPos);
+    const isolatedSection = normalizedText.substring(startPos, endPos);
 
-    // Extract closing units (handles clean decimals or space separation layouts)
-    const unitMatch = searchWindow.match(/Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i);
+    // Extract closing units within this exact isolated boundaries block
+    const unitMatch = isolatedSection.match(/Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i);
     const units = unitMatch ? parseFloat(unitMatch[1].replace(/,/g, '')) : 0;
 
-    // Extract cost figures (matches "Total Cost Value", "Cost Value", or "Amount Invested")
-    const costMatch = searchWindow.match(/(?:Total\s*Cost\s*Value|Cost\s*Value|Cost\s*Basis|Amount\s*Invested)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i);
+    // Extract absolute cost statement configurations
+    const costMatch = isolatedSection.match(/(?:Total\s*Cost\s*Value|Cost\s*Value|Cost\s*Basis|Amount\s*Invested)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i);
     const cost = costMatch ? parseFloat(costMatch[1].replace(/,/g, '')) : 0;
 
-    // Extract nearby Folio number
-    const folioMatch = searchWindow.match(/(?:Folio\s*No|Folio)\s*:\s*([\w\/|-]+)/i);
-    const folio = folioMatch ? folioMatch[1].trim() : "Unknown Folio";
-
+    // Track original holding records
     if (units > 0) {
-      if (portfolio[isin]) {
-        portfolio[isin].units += units;
-        portfolio[isin].cost += cost;
+      if (portfolio[current.isin]) {
+        portfolio[current.isin].units += units;
+        portfolio[current.isin].cost += cost;
       } else {
-        portfolio[isin] = {
-          isin,
+        portfolio[current.isin] = {
+          isin: current.isin,
           units,
           cost: cost || 0,
-          folios: [folio]
+          folios: []
         };
       }
     }
-  });
+  }
 
   return Object.values(portfolio);
 };
