@@ -1,16 +1,25 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
+// --- FOOLPROOF VITE WORKER CONFIG ---
+// This tells Vite to handle the PDF worker natively on GitHub Pages
 if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-  const workerCode = `importScripts('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js');`;
-  const blob = new Blob([workerCode], { type: 'application/javascript' });
-  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).href;
 }
 
-const cleanCamsLine = (line) => line.replace(/CAMSCASWS-\S+/gi, '').replace(/Version:\s*V[\d.]+\s+Live-\d+/gi, '').trim();
+const cleanCamsLine = (line) => {
+  return line
+    .replace(/CAMSCASWS-\S+/gi, '')
+    .replace(/Version:\s*V[\d.]+\s+Live-\d+/gi, '')
+    .trim();
+};
 
 export const parseCamsPDFText = (rawText) => {
   const portfolio = {};
   const lines = rawText.split('\n').map(cleanCamsLine).filter(Boolean);
+
   const folioRegex = /(?:Folio\s*No|Folio)\s*:\s*([\w\/|-]+)/i;
   const closingBalanceRegex = /Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i;
   const costBasisRegex = /(?:Cost\s*Basis|Amount\s*Invested|Value\s*at\s*Cost)\s*:?\s*(?:Rs\.?|₹)?\s*([\d,.]+)/i;
@@ -22,10 +31,13 @@ export const parseCamsPDFText = (rawText) => {
     const line = lines[i];
     const folioMatch = line.match(folioRegex);
     if (folioMatch) currentFolio = folioMatch[1].trim();
+    
     const isinMatch = line.match(isinRegex);
     if (isinMatch) currentIsin = isinMatch[1].replace(/\s/g, '').toUpperCase();
+    
     const balanceMatch = line.match(closingBalanceRegex);
     if (balanceMatch) currentUnits = parseFloat(balanceMatch[1].replace(/,/g, ''));
+    
     const costMatch = line.match(costBasisRegex);
     if (costMatch) currentCost = parseFloat(costMatch[1].replace(/,/g, ''));
 
@@ -45,7 +57,12 @@ export const parseCamsPDFText = (rawText) => {
         portfolio[currentIsin].units += currentUnits;
         portfolio[currentIsin].cost += currentCost;
       } else {
-        portfolio[currentIsin] = { isin: currentIsin, units: currentUnits, cost: currentCost || 0, folios: currentFolio ? [currentFolio] : [] };
+        portfolio[currentIsin] = { 
+          isin: currentIsin, 
+          units: currentUnits, 
+          cost: currentCost || 0, 
+          folios: currentFolio ? [currentFolio] : [] 
+        };
       }
       currentUnits = 0; currentCost = 0;
     }
