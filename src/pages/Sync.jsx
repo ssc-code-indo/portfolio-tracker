@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { parseCASTex } from '../parsers/cas'
+import { useState } from "react";
+import { handleCamsUpload } from "../utils/parsers/camsParser";
 import { parseIBKRCsv } from '../parsers/ibkr'
 import { parseZerodhaHoldingsCsv, parseZerodhaPnLXlsx, parseZerodhaTradebook } from '../parsers/zerodha'
 import { parseBankStatement } from '../parsers/bank'
