@@ -104,6 +104,23 @@ export default function Sync() {
           />
         </div>
 
-        {/* Card 4: Banking & CC Passers */}
+        {/* Card 4: Banking & CC Parsers */}
         <div style={{ border: "1px solid #e5e7eb", padding: "20px", borderRadius: "8px", backgroundColor: "#fff" }}>
-          <h3 style={{ fontSize: "16px", fontWeight: "600", margin: "0
+          <h3 style={{ fontSize: "16px", fontWeight: "600", margin: "0 0 6px 0", color: "#1f2937" }}>
+            Bank Statements & Credit Cards
+          </h3>
+          <p style={{ fontSize: "13px", color: "#6b7280", margin: "0 0 14px 0" }}>
+            Supports HSBC Indonesia (IDR) e-Statements/CC or HDFC (INR) PDF formats.
+          </p>
+          <input 
+            type="file" 
+            accept=".pdf" 
+            onChange={onBankFileChange}
+            style={{ fontSize: "14px" }}
+          />
+        </div>
+
+      </div>
+    </div>
+  );
+}
