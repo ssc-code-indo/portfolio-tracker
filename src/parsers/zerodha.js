@@ -11,13 +11,39 @@ export const handleZerodhaUpload = async (file) => {
     const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
     const holdings = {};
 
-    for (const row of rawRows) {
-      // Handles Zerodha standard column headers (Symbol, ISIN, Quantity, Average Price)
-      const symbol = (row['symbol'] || row['Symbol'] || row['ISIN'] || '').toString().trim().toUpperCase();
-      if (!symbol) continue;
+    if (rawRows.length > 0) {
+      console.log("=== ZERODHA DEBUG: First Row Headers ===", Object.keys(rawRows[0]));
+    }
 
-      const units = parseFloat(row['quantity'] || row['Quantity'] || row['Qty.'] || 0);
-      const avgPrice = parseFloat(row['average_price'] || row['Average Price'] || row['Price'] || row['Buy Price'] || 0);
+    for (const row of rawRows) {
+      // 1. Match symbol or instrument name using every known Zerodha layout header
+      const symbol = (
+        row['symbol'] || row['Symbol'] || 
+        row['Instrument'] || row['instrument'] || 
+        row['Trading Symbol'] || row['tradingsymbol'] || 
+        row['ISIN'] || row['isin'] || ''
+      ).toString().trim().toUpperCase();
+
+      if (!symbol || symbol.includes("TOTAL") || symbol.includes("SUB-TOTAL")) continue;
+
+      // 2. Match quantities
+      const units = parseFloat(
+        row['quantity'] || row['Quantity'] || 
+        row['Qty.'] || row['Qty'] || 
+        row['Available Qty'] || row['Available Quantity'] || 
+        row['Cleared Qty'] || 0
+      );
+
+      // 3. Match buy/average cost price
+      const avgPrice = parseFloat(
+        row['average_price'] || row['Average Price'] || 
+        row['Avg. Price'] || row['Avg Price'] || 
+        row['price'] || row['Price'] || 
+        row['Buy Price'] || row['Avg. cost'] || 
+        row['Avg Cost'] || row['Buy Average'] || 0
+      );
+
+      // 4. Match ISIN (Fallback to symbol string if blank)
       const isin = (row['isin'] || row['ISIN'] || symbol).toString().trim().toUpperCase();
 
       if (units > 0) {
@@ -37,7 +63,9 @@ export const handleZerodhaUpload = async (file) => {
     }
 
     const dataArray = Object.values(holdings);
-    if (dataArray.length === 0) throw new Error("No trade positions found in this spreadsheet format.");
+    if (dataArray.length === 0) {
+      throw new Error("Could not find rows with matching Quantity/Price headers. Check browser console for file schema.");
+    }
 
     return { success: true, data: dataArray };
   } catch (error) {
