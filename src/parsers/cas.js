@@ -11,12 +11,10 @@ if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
 export const parseCamsPDFText = (rawText) => {
   const portfolio = {};
   
-  // Normalize layout text: remove internal whitespace formatting gaps
-  const normalizedText = rawText
-    .replace(/"/g, '')
-    .replace(/INF\s+/gi, 'INF'); // Fixes KFintech space anomalies
+  // Normalize spacing anomalies (handles inner spacing e.g., 'INF 109...')
+  const normalizedText = rawText.replace(/INF\s+/gi, 'INF');
 
-  // 1. Locate every ISIN starting anchor in the entire file
+  // Match all ISIN strings as portfolio anchor indexes
   const isinRegex = /(INF[\dW]{9,12})/gi;
   const positions = [];
   let match;
@@ -29,28 +27,25 @@ export const parseCamsPDFText = (rawText) => {
   }
 
   if (positions.length === 0) {
-    console.error("Parser alert: No valid ISIN keys detected inside text matrix stream.");
+    console.error("Parser alert: Reconstructed matrix contains no valid ISIN patterns.");
     return [];
   }
 
-  // 2. Fragment the entire document text into absolute mutual fund boundaries
+  // Segment isolated boundaries for each fund profile
   for (let i = 0; i < positions.length; i++) {
     const current = positions[i];
     const startPos = current.index;
-    // The section boundaries extend all the way up until the next fund's ISIN starts
     const endPos = (i + 1 < positions.length) ? positions[i + 1].index : normalizedText.length;
     
     const isolatedSection = normalizedText.substring(startPos, endPos);
 
-    // Extract closing units within this exact isolated boundaries block
+    // Extract exact numbers safely 
     const unitMatch = isolatedSection.match(/Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i);
     const units = unitMatch ? parseFloat(unitMatch[1].replace(/,/g, '')) : 0;
 
-    // Extract absolute cost statement configurations
     const costMatch = isolatedSection.match(/(?:Total\s*Cost\s*Value|Cost\s*Value|Cost\s*Basis|Amount\s*Invested)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i);
     const cost = costMatch ? parseFloat(costMatch[1].replace(/,/g, '')) : 0;
 
-    // Track original holding records
     if (units > 0) {
       if (portfolio[current.isin]) {
         portfolio[current.isin].units += units;
@@ -75,10 +70,31 @@ export const handleCamsUpload = async (file, password = '') => {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password }).promise;
     let completeRawText = '';
     
+    // Process each page utilizing structural Y-X pixel tracking
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      completeRawText += textContent.items.map(item => item.str).join(' ') + '\n';
+      
+      // Sort elements by Y coordinate descending (top to bottom), then X coordinate ascending (left to right)
+      const sortedItems = textContent.items.sort((a, b) => {
+        const yDiff = b.transform[5] - a.transform[5];
+        if (Math.abs(yDiff) > 5) return yDiff; // items within 5 vertical units are treated as the same line
+        return a.transform[4] - b.transform[4];
+      });
+
+      // Build structured lines instead of an overlapping coordinate stream
+      let lastY = null;
+      let pageText = '';
+      
+      for (const item of sortedItems) {
+        if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+          pageText += '\n'; // Inject intentional newline break on block changes
+        }
+        pageText += item.str + ' ';
+        lastY = item.transform[5];
+      }
+      
+      completeRawText += pageText + '\n';
     }
     
     const parsedHoldings = parseCamsPDFText(completeRawText);
