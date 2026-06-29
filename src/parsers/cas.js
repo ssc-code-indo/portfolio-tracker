@@ -1,6 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-// --- FOOLPROOF VITE WORKER CONFIG ---
 if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -8,75 +7,60 @@ if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
   ).href;
 }
 
-const cleanCamsLine = (line) => {
-  return line
-    .replace(/CAMSCASWS-\S+/gi, '')
-    .replace(/Version:\s*V[\d.]+\s+Live-\d+/gi, '')
-    .trim();
-};
-
 export const parseCamsPDFText = (rawText) => {
-  const portfolio = {};
-  const lines = rawText.split('\n').map(cleanCamsLine).filter(Boolean);
+  // 1. Split the text into individual blocks based on Folio markers
+  const blocks = rawText.split(/(?=Folio No\s*:)/i);
+  const parsedHoldings = [];
 
-  // Flexible RegEx patterns adjusted for KFintech layout variations
-  const folioRegex = /(?:Folio\s*No|Folio)\s*:\s*([\w\/|-]+)/i;
-  const closingBalanceRegex = /Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i;
-  const costBasisRegex = /(?:Cost\s*Value|Cost\s*Basis|Amount\s*Invested|Total\s*Cost\s*Value)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i;
-  const isinRegex = /\b(INF[\dW\s]{9,10})\b/i;
+  for (const block of blocks) {
+    // Extract Folio Number
+    const folioMatch = block.match(/(?:Folio\s*No|Folio)\s*:\s*([\w\/|-]+)/i);
+    if (!folioMatch) continue;
+    const folio = folioMatch[1].trim();
 
-  let currentFolio = null, currentIsin = null, currentUnits = 0, currentCost = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // Find all ISIN positions inside this folio block
+    const isinMatches = [...block.matchAll(/\b(INF[\dW\s]{9,11})\b/gi)];
     
-    const folioMatch = line.match(folioRegex);
-    if (folioMatch) currentFolio = folioMatch[1].trim();
-    
-    const isinMatch = line.match(isinRegex);
-    if (isinMatch) currentIsin = isinMatch[1].replace(/\s/g, '').toUpperCase();
-    
-    const balanceMatch = line.match(closingBalanceRegex);
-    if (balanceMatch) currentUnits = parseFloat(balanceMatch[1].replace(/,/g, ''));
-    
-    const costMatch = line.match(costBasisRegex);
-    if (costMatch) currentCost = parseFloat(costMatch[1].replace(/,/g, ''));
+    for (const match of isinMatches) {
+      const isin = match[1].replace(/\s/g, '').toUpperCase();
+      
+      // Slice the block text starting from this specific ISIN instance to isolate its specific data metrics
+      const subText = block.substring(match.index);
 
-    // Check line text variations if the direct lookahead missed it
-    if (line.toLowerCase().includes('total cost value') && currentCost === 0) {
-      const inlineCost = line.match(/(?:[\d,.]+)/);
-      if (inlineCost) currentCost = parseFloat(inlineCost[0].replace(/,/g, ''));
-    }
+      // Extract the closing unit balance specific to this fund block
+      const balanceMatch = subText.match(/Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i);
+      const units = balanceMatch ? parseFloat(balanceMatch[1].replace(/,/g, '')) : 0;
 
-    if (currentIsin && currentUnits > 0) {
-      // Lookahead window to catch cost statements printed 1-2 lines below the ISIN banner
-      if (currentCost === 0) {
-        for (let lookahead = 1; lookahead <= 3; lookahead++) {
-          if (lines[i + lookahead]) {
-            const aheadCostMatch = lines[i + lookahead].match(costBasisRegex);
-            if (aheadCostMatch) {
-              currentCost = parseFloat(aheadCostMatch[1].replace(/,/g, ''));
-              break;
-            }
-          }
-        }
+      // Extract the cost value statement specific to this fund block
+      const costMatch = subText.match(/(?:Total\s*Cost\s*Value|Cost\s*Value|Cost\s*Basis|Amount\s*Invested)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i);
+      const cost = costMatch ? parseFloat(costMatch[1].replace(/,/g, '')) : 0;
+
+      if (units > 0) {
+        parsedHoldings.push({
+          isin,
+          units,
+          cost,
+          folios: [folio]
+        });
       }
-
-      if (portfolio[currentIsin]) {
-        portfolio[currentIsin].units += currentUnits;
-        portfolio[currentIsin].cost += currentCost;
-      } else {
-        portfolio[currentIsin] = { 
-          isin: currentIsin, 
-          units: currentUnits, 
-          cost: currentCost || 0, 
-          folios: currentFolio ? [currentFolio] : [] 
-        };
-      }
-      currentUnits = 0; currentCost = 0;
     }
   }
-  return Object.values(portfolio);
+
+  // Combine duplicate ISIN values if any exist across separate folios
+  const aggregatedPortfolio = {};
+  for (const holding of parsedHoldings) {
+    if (aggregatedPortfolio[holding.isin]) {
+      aggregatedPortfolio[holding.isin].units += holding.units;
+      aggregatedPortfolio[holding.isin].cost += holding.cost;
+      if (!aggregatedPortfolio[holding.isin].folios.includes(holding.folios[0])) {
+        aggregatedPortfolio[holding.isin].folios.push(holding.folios[0]);
+      }
+    } else {
+      aggregatedPortfolio[holding.isin] = holding;
+    }
+  }
+
+  return Object.values(aggregatedPortfolio);
 };
 
 export const handleCamsUpload = async (file, password = '') => {
