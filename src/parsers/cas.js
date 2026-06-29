@@ -1,7 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
 // --- FOOLPROOF VITE WORKER CONFIG ---
-// This tells Vite to handle the PDF worker natively on GitHub Pages
 if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -20,15 +19,17 @@ export const parseCamsPDFText = (rawText) => {
   const portfolio = {};
   const lines = rawText.split('\n').map(cleanCamsLine).filter(Boolean);
 
+  // Flexible RegEx patterns adjusted for KFintech layout variations
   const folioRegex = /(?:Folio\s*No|Folio)\s*:\s*([\w\/|-]+)/i;
   const closingBalanceRegex = /Closing\s*Unit\s*Balance\s*:?\s*([\d,.]+)/i;
-  const costBasisRegex = /(?:Cost\s*Basis|Amount\s*Invested|Value\s*at\s*Cost)\s*:?\s*(?:Rs\.?|₹)?\s*([\d,.]+)/i;
+  const costBasisRegex = /(?:Cost\s*Value|Cost\s*Basis|Amount\s*Invested|Total\s*Cost\s*Value)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,.]+)/i;
   const isinRegex = /\b(INF[\dW\s]{9,10})\b/i;
 
   let currentFolio = null, currentIsin = null, currentUnits = 0, currentCost = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    
     const folioMatch = line.match(folioRegex);
     if (folioMatch) currentFolio = folioMatch[1].trim();
     
@@ -41,9 +42,16 @@ export const parseCamsPDFText = (rawText) => {
     const costMatch = line.match(costBasisRegex);
     if (costMatch) currentCost = parseFloat(costMatch[1].replace(/,/g, ''));
 
+    // Check line text variations if the direct lookahead missed it
+    if (line.toLowerCase().includes('total cost value') && currentCost === 0) {
+      const inlineCost = line.match(/(?:[\d,.]+)/);
+      if (inlineCost) currentCost = parseFloat(inlineCost[0].replace(/,/g, ''));
+    }
+
     if (currentIsin && currentUnits > 0) {
+      // Lookahead window to catch cost statements printed 1-2 lines below the ISIN banner
       if (currentCost === 0) {
-        for (let lookahead = 1; lookahead <= 2; lookahead++) {
+        for (let lookahead = 1; lookahead <= 3; lookahead++) {
           if (lines[i + lookahead]) {
             const aheadCostMatch = lines[i + lookahead].match(costBasisRegex);
             if (aheadCostMatch) {
@@ -53,6 +61,7 @@ export const parseCamsPDFText = (rawText) => {
           }
         }
       }
+
       if (portfolio[currentIsin]) {
         portfolio[currentIsin].units += currentUnits;
         portfolio[currentIsin].cost += currentCost;
@@ -75,11 +84,13 @@ export const handleCamsUpload = async (file, password = '') => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, password }).promise;
     let completeRawText = '';
+    
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       completeRawText += textContent.items.map(item => item.str).join(' ') + '\n';
     }
+    
     const parsedHoldings = parseCamsPDFText(completeRawText);
     if (parsedHoldings.length === 0) throw new Error("No holdings found in PDF — is this a CAMS/KFintech CAS?");
     return { success: true, data: parsedHoldings };
